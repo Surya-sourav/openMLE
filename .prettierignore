@@ -1,0 +1,8 @@
+node_modules
+dist
+dist-electron
+dist-react
+_database/*.db
+.next
+.turbo
+coverage
