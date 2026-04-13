@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { FileSpreadsheet } from 'lucide-react';
 import { useUploadDataset } from '@/hooks/api/ml-agent';
 
-export function DatasetUploader() {
+export function DatasetUploader({ onSuccess }: { onSuccess?: () => void } = {}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const upload = useUploadDataset();
@@ -11,7 +11,10 @@ export function DatasetUploader() {
     const reader = new FileReader();
     reader.onload = (e) => {
       const buffer = e.target?.result as ArrayBuffer;
-      upload.mutate({ name: file.name, buffer, mimeType: file.type });
+      upload.mutate(
+        { name: file.name, buffer, mimeType: file.type },
+        { onSuccess: () => { setTimeout(() => onSuccess?.(), 600); } },
+      );
     };
     reader.readAsArrayBuffer(file);
   }

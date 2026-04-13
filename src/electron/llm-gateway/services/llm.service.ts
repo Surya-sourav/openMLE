@@ -2,28 +2,29 @@ import {
   llmconn,
   LLMconnrepository,
 } from '../../internal-database/repositories/llmconn.repository.js';
-import { Openaiprovider } from '../providers/open-ai.provider.js';
-import { LLMConnectionListItem as listllm } from '../interfaces/requests/listllmconnection.request.js';
-import { CreateLLMConnectionRequest as llmconnreq } from '../interfaces/requests/createllmconnection.request.js';
-import { LLMConnectionResponse as llmconnres } from '../../internal-database/repositories/llmconn.repository.js';
-import { UpdateLLMConnectionRequest as updatellmconn } from '../interfaces/requests/updatellmconnection.request.js';
+import { CerebrasProvider } from '../providers/cerebras.provider.js';
+import type { LLMConnectionListItem as listllm } from '../interfaces/requests/listllmconnection.request.js';
+import type { CreateLLMConnectionRequest as llmconnreq } from '../interfaces/requests/createllmconnection.request.js';
+import type { LLMConnectionResponse as llmconnres } from '../../internal-database/repositories/llmconn.repository.js';
+import type { UpdateLLMConnectionRequest as updatellmconn } from '../interfaces/requests/updatellmconnection.request.js';
 import { createOpenAI } from '@ai-sdk/openai';
+
+const CEREBRAS_BASE_URL = 'https://api.cerebras.ai/v1';
 
 export class LLMservice {
   private static instance: LLMservice | null = null;
   private llmrepository: LLMconnrepository;
-  public defaultllm: (llmconn & { model: any }) | null = null; // model is the AI SDK model object
-  private openaiprovider: Openaiprovider;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  public defaultllm: (llmconn & { model: any }) | null = null;
+  private cerebrasprovider: CerebrasProvider;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private existingconnections: Map<number, any> = new Map();
 
   public constructor() {
     this.llmrepository = new LLMconnrepository();
-    this.openaiprovider = new Openaiprovider();
+    this.cerebrasprovider = new CerebrasProvider();
   }
 
-  /**
-   * Get the singleton instance of LLMservice
-   */
   public static getInstance(): LLMservice {
     if (!LLMservice.instance) {
       LLMservice.instance = new LLMservice();
@@ -31,20 +32,13 @@ export class LLMservice {
     return LLMservice.instance;
   }
 
-  /*
-   * Save a LLM Connection
-   */
   async saveconnection(connection: llmconnreq): Promise<llmconnres> {
     try {
-
-      /* Check whether the Connection is Valid or not */
-        if(!await this.isLlmValid(connection))
-        {
-          throw new Error(`LLM Conection is not valid ; provided API key is wrong ${connection.key}`);
-        }
+      if (!await this.isLlmValid(connection)) {
+        throw new Error(`LLM connection is not valid — provided API key failed validation.`);
+      }
 
       const savedconnection = this.llmrepository.saveConnection(connection);
-
       const response: llmconnres = {
         ...savedconnection,
         is_default: savedconnection.is_default ?? false,
@@ -52,9 +46,9 @@ export class LLMservice {
 
       if (connection.is_default) {
         this.llmrepository.setDefaultLlm(savedconnection.id);
-        console.log(` LLM ${savedconnection.provider} Saved & is default now...`);
+        console.log(`✅ LLM ${savedconnection.provider} saved as default`);
       } else {
-        console.log(`LLM ${savedconnection.provider} Saved`);
+        console.log(`✅ LLM ${savedconnection.provider} saved`);
       }
 
       return response;
@@ -64,9 +58,6 @@ export class LLMservice {
     }
   }
 
-  /*
-   * List all the existing LLM Connections
-   */
   async getAllConnections(): Promise<listllm[]> {
     try {
       return this.llmrepository.getExistingConfigurations();
@@ -76,9 +67,6 @@ export class LLMservice {
     }
   }
 
-  /*
-   * Get a Particular LLM Connection
-   */
   async getConnection(id: number): Promise<llmconn | null> {
     try {
       return this.llmrepository.getLlmConnection(id);
@@ -88,9 +76,6 @@ export class LLMservice {
     }
   }
 
-  /*
-   *  Get the Default LLM
-   */
   async getDefaultLLM(): Promise<llmconn | null> {
     try {
       return this.llmrepository.getDefaultLlm();
@@ -100,9 +85,6 @@ export class LLMservice {
     }
   }
 
-  /*
-   * Set the default LLM
-   */
   async setdefaultllm(id: number): Promise<void> {
     try {
       this.llmrepository.setDefaultLlm(id);
@@ -113,20 +95,13 @@ export class LLMservice {
     }
   }
 
-  /*
-   * Update the LLM Connection
-   */
   async updateConnection(id: number, updates: updatellmconn): Promise<llmconnres> {
     try {
-      // Disconnect if currently active
       if (this.existingconnections.has(id)) {
         this.existingconnections.delete(id);
-        console.log(` Disconnected LLM connection ${id} for update`);
       }
-
       const updatedConnection = this.llmrepository.updateConnection(id, updates);
-      console.log(` LLM connection ${id} updated`);
-
+      console.log(`✅ LLM connection ${id} updated`);
       return updatedConnection;
     } catch (error) {
       console.error(' Error updating LLM connection:', error);
@@ -134,91 +109,60 @@ export class LLMservice {
     }
   }
 
-  /*
-   *initialize a LLM provider to be used by the SQL Agent
+  /**
+   * Initialize the default LLM model object for the SQL Agent (Vercel AI SDK).
+   * Cerebras is OpenAI-compatible, so we use @ai-sdk/openai with a custom base URL.
    */
   async initializellm(): Promise<void> {
     try {
       const defaultllm = this.llmrepository.getDefaultLlm();
-
       if (!defaultllm) {
         console.log(' No default LLM configured');
         return;
       }
-      
+
       console.log(`Default LLM found: ${defaultllm.provider} - ${defaultllm.model}`);
 
-      // Create the AI SDK model object with API key from database
-      let aiModel: any;
-      
-      switch (defaultllm.provider.toLowerCase()) {
-        case 'openai':
-          const openai = createOpenAI({
-            apiKey: defaultllm.key,
-          });
-          aiModel = openai(defaultllm.model); // e.g., 'gpt-4', 'gpt-3.5-turbo'
-          break;
-          
-        case 'anthropic':
-          // Future: add anthropic support
-          throw new Error('Anthropic provider not implemented yet');
-          
-        default:
-          throw new Error(`Unsupported LLM provider: ${defaultllm.provider}`);
+      if (defaultllm.provider.toLowerCase() !== 'cerebras') {
+        throw new Error(`Unsupported LLM provider: ${defaultllm.provider}`);
       }
 
-      // Store the connection info with the AI SDK model object
-      this.defaultllm = {
-        ...defaultllm,
-        model: aiModel, // Override with AI SDK model object
-      };
+      // Cerebras is OpenAI-compatible — use @ai-sdk/openai with the Cerebras base URL
+      const cerebrasCompat = createOpenAI({
+        apiKey:  defaultllm.key,
+        baseURL: CEREBRAS_BASE_URL,
+        name:    'cerebras',
+      });
 
-      console.log(`✅ LLM Model initialized: ${defaultllm.provider}/${defaultllm.model}`);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const aiModel = cerebrasCompat(defaultllm.model || 'llama3.1-8b') as any;
 
-      // Also connect through the provider for other operations
+      this.defaultllm = { ...defaultllm, model: aiModel };
+      console.log(`✅ LLM Model initialised: cerebras/${defaultllm.model || 'llama3.1-8b'}`);
+
       await this.connectllm(defaultllm.id);
     } catch (error) {
-      console.error(' Error initializing LLM:', error);
+      console.error(' Error initialising LLM:', error);
       throw error;
     }
   }
 
-  /*
-   * Connect the LLM accordingly to the above initialized llm method
-   */
-  async connectllm(id: number): Promise<any> {
+  async connectllm(id: number): Promise<unknown> {
     try {
       const connection = this.llmrepository.getLlmConnection(id);
+      if (!connection) throw new Error(`Connection ${id} not found`);
 
-      if (!connection) {
-        throw new Error(`Connection for ${id} not found`);
-      }
-
-      // Check if already connected
       if (this.existingconnections.has(connection.id!)) {
-        console.log(` Already connected to ${id}`);
         return this.existingconnections.get(connection.id!);
       }
 
-      let connector: any;
-
-      switch (connection.provider.toLowerCase()) {
-        case 'openai':
-          //  FIX: Proper provider connection
-          connector = await this.openaiprovider.connect(connection);
-          break;
-
-        case 'anthropic':
-          // Future implementation
-          throw new Error('Anthropic provider not implemented yet');
-
-        default:
-          throw new Error(`Unsupported LLM Provider: ${connection.provider}`);
+      if (connection.provider.toLowerCase() !== 'cerebras') {
+        throw new Error(`Unsupported LLM provider: ${connection.provider}`);
       }
 
+      const connector = await this.cerebrasprovider.connect(connection);
       this.existingconnections.set(connection.id!, connector);
-      console.log(` Connected to ${id}`);
-
+      console.log(`✅ Connected to LLM ${id}`);
       return connector;
     } catch (error) {
       console.error('❌ Error connecting to LLM:', error);
@@ -226,25 +170,16 @@ export class LLMservice {
     }
   }
 
-  /*
-   * Disconnect the LLM
-   */
-  async disconnectLLM(id : number): Promise<void> {
+  async disconnectLLM(id: number): Promise<void> {
     try {
       const connection = this.llmrepository.getLlmConnection(id);
-
       if (connection && this.existingconnections.has(connection.id!)) {
         const connector = this.existingconnections.get(connection.id!);
-
-        // Call disconnect method if available
         if (connector && typeof connector.disconnect === 'function') {
           connector.disconnect();
         }
-
         this.existingconnections.delete(connection.id!);
-        console.log(` Disconnected from ${id}`);
-      } else {
-        console.log(`ℹ ${id} was not connected`);
+        console.log(` Disconnected from LLM ${id}`);
       }
     } catch (error) {
       console.error('Error disconnecting LLM:', error);
@@ -252,29 +187,19 @@ export class LLMservice {
     }
   }
 
-  isConnected(id : number): boolean {
+  isConnected(id: number): boolean {
     try {
       const connection = this.llmrepository.getLlmConnection(id);
       return connection ? this.existingconnections.has(connection.id!) : false;
-    } catch (error) {
-      console.error(' Error checking connection status:', error);
+    } catch {
       return false;
     }
   }
 
-  getActiveConnectionsCount(): number {
-    return this.existingconnections.size;
-  }
-
-  async isLlmValid(connection : llmconnreq) : Promise<Boolean>
-  {
-    let isValid : any;
-    switch(connection.provider.toLocaleLowerCase())
-    {
-      case 'openai' :
-        isValid = await this.openaiprovider.isValidConnection(connection);
-        break;
+  async isLlmValid(connection: llmconnreq): Promise<boolean> {
+    if (connection.provider.toLowerCase() !== 'cerebras') {
+      throw new Error(`Unsupported provider: ${connection.provider}. Only 'cerebras' is supported.`);
     }
-    return isValid?true : false;
+    return this.cerebrasprovider.isValidConnection(connection);
   }
 }

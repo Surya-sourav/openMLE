@@ -49,6 +49,13 @@ export class MLAgentHandler {
       catch (e: unknown) { return err(e instanceof Error ? e.message : String(e)); }
     });
 
+    ipcMain.handle(MLChannels.QUERY_ASK, async (_e, payload: { datasetId: string; question: string }) => {
+      try {
+        const answer = await this.datasetService.queryDataset(payload.datasetId, payload.question);
+        return ok({ answer });
+      } catch (e: unknown) { return err(e instanceof Error ? e.message : String(e)); }
+    });
+
     ipcMain.handle(MLChannels.DATASET_PREVIEW, async (_e, payload: { id: string; rows?: number }) => {
       try { return ok(await this.datasetService.previewDataset(payload.id, payload.rows)); }
       catch (e: unknown) { return err(e instanceof Error ? e.message : String(e)); }

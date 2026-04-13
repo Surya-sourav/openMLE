@@ -75,7 +75,8 @@ export class DatasetService {
   private async analyseCSV(
     csvPath: string
   ): Promise<{ columns: ColumnMeta[]; rowCount: number }> {
-    const Papa = await import('papaparse');
+    const PapaModule = await import('papaparse');
+    const Papa = PapaModule.default ?? PapaModule;
     const content = fs.readFileSync(csvPath, 'utf-8');
     const parsed = Papa.parse(content, { header: true, skipEmptyLines: true, dynamicTyping: false });
     const rows = parsed.data as Record<string, string>[];
@@ -126,7 +127,8 @@ export class DatasetService {
     const meta = this.getDataset(id);
     if (!meta) throw new Error(`Dataset ${id} not found`);
 
-    const Papa = await import('papaparse');
+    const PapaModule = await import('papaparse');
+    const Papa = PapaModule.default ?? PapaModule;
     const content = fs.readFileSync(meta.storedPath, 'utf-8');
     const parsed = Papa.parse(content, { header: true, skipEmptyLines: true, dynamicTyping: true });
     const headers = parsed.meta.fields ?? [];
@@ -144,6 +146,56 @@ export class DatasetService {
     fs.rmSync(datasetDir, { recursive: true, force: true });
     this.registry = this.registry.filter((d) => d.id !== id);
     this.saveRegistry();
+  }
+
+  async queryDataset(id: string, question: string): Promise<string> {
+    const meta = this.getDataset(id);
+    if (!meta) throw new Error(`Dataset ${id} not found`);
+
+    const PapaModule = await import('papaparse');
+    const Papa = PapaModule.default ?? PapaModule;
+    const content = fs.readFileSync(meta.storedPath, 'utf-8');
+    const parsed = Papa.parse(content, { header: true, skipEmptyLines: true, dynamicTyping: false });
+    const rows = (parsed.data as Record<string, string>[]).slice(0, 120);
+    const headers = parsed.meta.fields ?? [];
+
+    // Build a compact CSV sample for the prompt
+    const csvLines = [
+      headers.join(','),
+      ...rows.map((row) => headers.map((h: string) => String(row[h] ?? '')).join(',')),
+    ];
+    const csvSample = csvLines.join('\n');
+
+    const columnDesc = meta.columns
+      .map(
+        (c) =>
+          `  • ${c.name} (${c.dtype}, ${c.uniqueCount} unique, ${c.nullCount} nulls)` +
+          (c.sample.length ? ` — e.g. ${c.sample.slice(0, 3).join(', ')}` : ''),
+      )
+      .join('\n');
+
+    const system = `You are a data analyst assistant. The user has uploaded a CSV dataset called "${meta.originalName}".
+
+Dataset overview:
+  • ${meta.rowCount} rows, ${meta.columnCount} columns
+  • Uploaded: ${meta.uploadedAt}
+
+Columns:
+${columnDesc}
+
+First ${rows.length} rows (CSV):
+\`\`\`csv
+${csvSample}
+\`\`\`
+
+Answer the user's question accurately using the data above. Be concise and use specific values from the data when relevant. If the question requires computation (e.g. averages, counts), calculate it from the sample provided.`;
+
+    const { complete } = await import('../llm/client.js');
+    return complete({
+      system,
+      messages: [{ role: 'user', content: question }],
+      maxTokens: 1024,
+    });
   }
 
   updateInferredTask(id: string, taskType: MLTaskType): void {

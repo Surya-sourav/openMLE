@@ -51,6 +51,9 @@ export interface MLAgentAPI {
   deleteDataset(id: string): Promise<{ success: boolean; error?: string }>;
   previewDataset(id: string, rows?: number): Promise<{ success: boolean; data?: { headers: string[]; rows: (string | number | null)[][] }; error?: string }>;
 
+  // Query mode — ask a natural-language question about an uploaded dataset
+  queryDataset(datasetId: string, question: string): Promise<{ success: boolean; data?: { answer: string }; error?: string }>;
+
   // Projects
   createProject(name: string, datasetId: string, goal: string): Promise<{ success: boolean; data?: MLProject; error?: string }>;
   listProjects(): Promise<{ success: boolean; data?: MLProject[]; error?: string }>;

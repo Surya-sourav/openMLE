@@ -4,7 +4,11 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 export function useMLDatasets() {
   return useQuery({
     queryKey: ['ml', 'datasets'],
-    queryFn: () => window.mlAgent.listDatasets().then((r) => r.data ?? []),
+    queryFn: () => window.mlAgent.listDatasets().then((r) => {
+      if (!r.success) throw new Error(r.error ?? 'Failed to list datasets');
+      return r.data ?? [];
+    }),
+    staleTime: 0,
   });
 }
 
@@ -12,24 +16,43 @@ export function useUploadDataset() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ name, buffer, mimeType }: { name: string; buffer: ArrayBuffer; mimeType: string }) =>
-      window.mlAgent.uploadDataset(name, buffer, mimeType),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['ml', 'datasets'] }),
+      window.mlAgent.uploadDataset(name, buffer, mimeType).then((r) => {
+        if (!r.success) throw new Error(r.error ?? 'Upload failed');
+        return r.data!;
+      }),
+    onSuccess: () => qc.refetchQueries({ queryKey: ['ml', 'datasets'] }),
   });
 }
 
 export function useDeleteDataset() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => window.mlAgent.deleteDataset(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['ml', 'datasets'] }),
+    mutationFn: (id: string) => window.mlAgent.deleteDataset(id).then((r) => {
+      if (!r.success) throw new Error(r.error ?? 'Delete failed');
+    }),
+    onSuccess: () => qc.refetchQueries({ queryKey: ['ml', 'datasets'] }),
   });
 }
 
 export function usePreviewDataset(id: string | null) {
   return useQuery({
     queryKey: ['ml', 'dataset', 'preview', id],
-    queryFn: () => window.mlAgent.previewDataset(id!).then((r) => r.data),
+    queryFn: () => window.mlAgent.previewDataset(id!).then((r) => {
+      if (!r.success) throw new Error(r.error ?? 'Preview failed');
+      return r.data!;
+    }),
     enabled: !!id,
+  });
+}
+
+// ── Ask Data (Query mode) ─────────────────────────────────────────────────────
+export function useAskDataset() {
+  return useMutation({
+    mutationFn: ({ datasetId, question }: { datasetId: string; question: string }) =>
+      window.mlAgent.queryDataset(datasetId, question).then((r) => {
+        if (!r.success) throw new Error(r.error ?? 'Query failed');
+        return r.data!.answer;
+      }),
   });
 }
 
@@ -45,8 +68,11 @@ export function useCreateProject() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ name, datasetId, goal }: { name: string; datasetId: string; goal: string }) =>
-      window.mlAgent.createProject(name, datasetId, goal),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['ml', 'projects'] }),
+      window.mlAgent.createProject(name, datasetId, goal).then((r) => {
+        if (!r.success) throw new Error(r.error ?? 'Failed to create project');
+        return r.data!;
+      }),
+    onSuccess: () => qc.refetchQueries({ queryKey: ['ml', 'projects'] }),
   });
 }
 

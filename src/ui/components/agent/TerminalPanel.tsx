@@ -5,7 +5,7 @@ import '@xterm/xterm/css/xterm.css';
 import { useAppStore } from '@/store';
 
 interface Props {
-  runId: number | null;
+  runId?: number | null;
 }
 
 export function TerminalPanel({ runId: _runId }: Props) {

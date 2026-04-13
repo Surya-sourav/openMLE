@@ -1,17 +1,20 @@
 import { config } from '../config.js';
 
-// Local type aliases — replaced by real Anthropic types once the SDK is installed
 export interface MessageParam {
-  role: 'user' | 'assistant';
-  content: string | Array<{ type: string; text?: string; [k: string]: unknown }>;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
 }
-interface TextBlock { type: 'text'; text: string }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _client: any = null;
 
 async function resolveApiKey(): Promise<string> {
-  if (config.anthropicApiKey) return config.anthropicApiKey;
+  // Ensure .env is loaded — safe to call multiple times (won't override existing vars)
+  const { default: dotenv } = await import('dotenv') as { default: typeof import('dotenv') };
+  dotenv.config();
+  _client = null; // reset so new key/model takes effect
+
+  if (config.cerebrasApiKey) return config.cerebrasApiKey;
 
   try {
     const { getDatabase } = await import('../../electron/internal-database/local.database-config.js');
@@ -21,7 +24,7 @@ async function resolveApiKey(): Promise<string> {
     const row = db
       .select({ key: llmconn.key })
       .from(llmconn)
-      .where(eq(llmconn.provider, 'anthropic'))
+      .where(eq(llmconn.provider, 'cerebras'))
       .orderBy(desc(llmconn.id))
       .limit(1)
       .get();
@@ -31,7 +34,7 @@ async function resolveApiKey(): Promise<string> {
   }
 
   throw new Error(
-    'No Anthropic API key found. Add one via Settings → LLM Connections (provider: anthropic).'
+    'No Cerebras API key found. Add one via Settings (provider: cerebras).',
   );
 }
 
@@ -39,10 +42,9 @@ async function resolveApiKey(): Promise<string> {
 export async function getClient(): Promise<any> {
   if (_client) return _client;
   const apiKey = await resolveApiKey();
-  // Dynamic import so the app loads even when @anthropic-ai/sdk is not yet installed
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { default: Anthropic } = await import('@anthropic-ai/sdk') as any;
-  _client = new Anthropic({ apiKey });
+  const { default: Cerebras } = (await import('@cerebras/cerebras_cloud_sdk')) as any;
+  _client = new Cerebras({ apiKey });
   return _client;
 }
 
@@ -59,34 +61,45 @@ export interface CompleteOptions {
   model?: string;
 }
 
+const DEFAULT_MODEL = 'llama3.1-8b';
+
 export async function complete(options: CompleteOptions): Promise<string> {
   const client = await getClient();
+  const allMessages = [
+    { role: 'system', content: options.system },
+    ...options.messages,
+  ];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const response = await (client as any).messages.create({
-    model:      options.model ?? 'claude-opus-4-5',
-    max_tokens: options.maxTokens ?? 4096,
-    system:     options.system,
-    messages:   options.messages,
+  const response = await (client as any).chat.completions.create({
+    model:                options.model ?? DEFAULT_MODEL,
+    max_completion_tokens: options.maxTokens ?? 4096,
+    messages:             allMessages,
+    temperature:          0.2,
+    top_p:                1,
+    stream:               false,
   });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const block = (response.content as any[]).find((b: { type: string }) => b.type === 'text') as TextBlock | undefined;
-  return block?.text ?? '';
+  return (response as any).choices[0]?.message?.content ?? '';
 }
 
 export async function* stream(options: CompleteOptions): AsyncGenerator<string> {
   const client = await getClient();
+  const allMessages = [
+    { role: 'system', content: options.system },
+    ...options.messages,
+  ];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const s = (client as any).messages.stream({
-    model:      options.model ?? 'claude-opus-4-5',
-    max_tokens: options.maxTokens ?? 4096,
-    system:     options.system,
-    messages:   options.messages,
+  const chunks = await (client as any).chat.completions.create({
+    model:                options.model ?? DEFAULT_MODEL,
+    max_completion_tokens: options.maxTokens ?? 4096,
+    messages:             allMessages,
+    temperature:          0.2,
+    top_p:                1,
+    stream:               true,
   });
-  for await (const event of s) {
+  for await (const chunk of chunks) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const e = event as any;
-    if (e.type === 'content_block_delta' && e.delta?.type === 'text_delta') {
-      yield e.delta.text as string;
-    }
+    const text = (chunk as any).choices[0]?.delta?.content;
+    if (text) yield text as string;
   }
 }

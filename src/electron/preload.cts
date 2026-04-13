@@ -85,6 +85,7 @@ const mlAgentAPI: MLAgentAPI = {
   listDatasets: () => ipcRenderer.invoke('ml/dataset/list'),
   deleteDataset: (id) => ipcRenderer.invoke('ml/dataset/delete', id),
   previewDataset: (id, rows) => ipcRenderer.invoke('ml/dataset/preview', { id, rows }),
+  queryDataset: (datasetId, question) => ipcRenderer.invoke('ml/query/ask', { datasetId, question }),
 
   createProject: (name, datasetId, goal) =>
     ipcRenderer.invoke('ml/project/create', { name, datasetId, goal }),

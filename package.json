@@ -26,6 +26,7 @@
     "@aws-sdk/client-s3": "^3.0.0",
     "@aws-sdk/client-sagemaker": "^3.0.0",
     "@azure/identity": "^4.0.0",
+    "@cerebras/cerebras_cloud_sdk": "^1.64.1",
     "@google-cloud/aiplatform": "^3.0.0",
     "@libsql/client": "^0.15.15",
     "@mastra/core": "^0.24.9",

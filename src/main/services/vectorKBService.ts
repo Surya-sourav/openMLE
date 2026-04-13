@@ -2,7 +2,6 @@ import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
 import { config } from '../config.js';
-import { getClient } from '../llm/client.js';
 import type { KBResult } from '../types/agent.js';
 
 interface KBEntry {
@@ -27,15 +26,6 @@ function bm25Score(query: string[], doc: string[], k1 = 1.5, b = 0.75, avgLen = 
   }, 0);
 }
 
-function cosineSimilarity(a: number[], b: number[]): number {
-  let dot = 0, normA = 0, normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB) + 1e-10);
-}
 
 export class VectorKBService {
   private entries: KBEntry[] = [];
@@ -114,56 +104,30 @@ export class VectorKBService {
     return chunks;
   }
 
-  private async embedBatch(texts: string[]): Promise<number[][]> {
-    try {
-      const client = await getClient();
-      // Use Anthropic's embeddings endpoint
-      const response = await (client as unknown as { post: (path: string, options: unknown) => Promise<{ embeddings: { embedding: number[] }[] }> }).post('/v1/embeddings', {
-        body: { model: 'voyage-3', input: texts },
-      });
-      return response.embeddings.map((e) => e.embedding);
-    } catch (err) {
-      console.warn('[VectorKB] Embedding failed, using zero vectors:', err);
-      // Return zero vectors as fallback so indexing doesn't fail
-      return texts.map(() => new Array(1024).fill(0) as number[]);
-    }
-  }
-
-  private async embedQuery(query: string): Promise<number[]> {
-    const vecs = await this.embedBatch([query]);
-    return vecs[0];
+  // Cerebras has no embeddings API — use BM25-only ranking throughout.
+  // Zero vectors are stored so the on-disk cache format stays compatible
+  // if an embedding provider is added later.
+  private embedBatch(texts: string[]): number[][] {
+    return texts.map(() => [] as number[]);
   }
 
   async search(query: string, topK = 8): Promise<KBResult[]> {
-    if (this.entries.length === 0) return [];
-    const qVec = await this.embedQuery(query);
-
-    const scored = this.entries.map((entry) => ({
-      content: entry.content,
-      source: entry.source,
-      score: cosineSimilarity(qVec, entry.vector),
-    }));
-
-    return scored.sort((a, b) => b.score - a.score).slice(0, topK);
+    return this.hybridSearch(query, topK);
   }
 
   async hybridSearch(query: string, topK = 8): Promise<KBResult[]> {
     if (this.entries.length === 0) return [];
 
-    const qVec = await this.embedQuery(query);
     const qTokens = tokenize(query);
     const avgDocLen = this.entries.reduce((s, e) => s + tokenize(e.content).length, 0) / this.entries.length;
 
     const scored = this.entries.map((entry) => {
-      const vScore = cosineSimilarity(qVec, entry.vector);
       const docTokens = tokenize(entry.content);
-      const kScore = bm25Score(qTokens, docTokens, 1.5, 0.75, avgDocLen);
-      // Normalise BM25 to [0,1] range (approximate)
-      const kScoreNorm = Math.min(kScore / 10, 1);
+      const score = bm25Score(qTokens, docTokens, 1.5, 0.75, avgDocLen);
       return {
         content: entry.content,
         source: entry.source,
-        score: 0.7 * vScore + 0.3 * kScoreNorm,
+        score,
       };
     });
 

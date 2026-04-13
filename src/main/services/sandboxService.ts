@@ -23,6 +23,11 @@ export interface SandboxResult {
 }
 
 let _pythonExe: string | null = null;
+let _depsInstalled = false;
+
+const ML_PACKAGES = [
+  'pandas', 'numpy', 'scikit-learn', 'matplotlib', 'seaborn', 'scipy',
+];
 
 function resolvePython(): string {
   if (_pythonExe) return _pythonExe;
@@ -33,14 +38,38 @@ function resolvePython(): string {
     return _pythonExe;
   }
 
+  // Prefer a Python that already has pandas
+  const candidates = [
+    process.env.HOME + '/miniforge3/bin/python3',
+    process.env.HOME + '/miniconda3/bin/python3',
+    process.env.HOME + '/anaconda3/bin/python3',
+    process.env.HOME + '/.pyenv/shims/python3',
+    '/opt/homebrew/bin/python3',
+    '/usr/local/bin/python3',
+    'python3',
+    'python',
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      const out = execSync(`"${candidate}" -c "import pandas; print('ok')" 2>/dev/null`, {
+        encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      if (out === 'ok') {
+        _pythonExe = candidate;
+        _depsInstalled = true; // already has packages
+        return _pythonExe;
+      }
+    } catch { /* skip */ }
+  }
+
+  // Fall back to whatever python3 is on PATH
   for (const candidate of ['python3', 'python']) {
     try {
       execSync(`which ${candidate}`, { stdio: 'ignore' });
       _pythonExe = candidate;
       return _pythonExe;
-    } catch {
-      // not on PATH
-    }
+    } catch { /* skip */ }
   }
 
   throw new Error(
@@ -48,8 +77,26 @@ function resolvePython(): string {
   );
 }
 
+function ensureDeps(): void {
+  if (_depsInstalled) return;
+  const py = resolvePython();
+  try {
+    console.log('[sandbox] Installing ML dependencies...');
+    execSync(
+      `"${py}" -m pip install --quiet --disable-pip-version-check ${ML_PACKAGES.join(' ')}`,
+      { stdio: 'inherit', timeout: 120_000 },
+    );
+    _depsInstalled = true;
+    console.log('[sandbox] ML dependencies ready.');
+  } catch (e) {
+    console.warn('[sandbox] pip install failed, proceeding anyway:', e);
+    _depsInstalled = true; // don't retry on every run
+  }
+}
+
 export class SandboxService {
   async executePython(options: SandboxOptions): Promise<SandboxResult> {
+    ensureDeps();
     const pythonExe = resolvePython();
     const startMs = Date.now();
     const timeoutMs = options.timeoutMs ?? config.sandboxTimeoutMs;
